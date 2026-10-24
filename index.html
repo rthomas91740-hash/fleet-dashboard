@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Wolf Dashboard</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css">
+<style>
+  /* Brand tokens: swap these to restyle everything. Dark only, to match fleetwolf.com. */
+  :root {
+    color-scheme: dark;
+    --bg: #070b13;
+    --panel: #0d1420;
+    --panel-2: #121b2b;
+    --line: rgba(150, 185, 235, 0.13);
+    --line-strong: rgba(150, 185, 235, 0.26);
+    --frost: #e8f0fb;
+    --muted: #8d9db7;
+    --faint: #5f6f89;
+    --signal: #3b8cff;          /* Signal blue */
+    --signal-soft: rgba(59, 140, 255, 0.16);
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #e66767;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--frost); font: 15px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; border-radius: 4px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  [hidden] { display: none !important; }
+
+  /* Header */
+  header.bar { position: sticky; top: 0; z-index: 1000; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
+    padding: 12px 24px; background: rgba(7, 11, 19, 0.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  .brand { font-weight: 700; font-size: 18px; letter-spacing: 0.01em; display: flex; align-items: center; gap: 10px; }
+  .brand i { display: inline-block; width: 10px; height: 10px; background: var(--signal); transform: rotate(45deg); border-radius: 2px; }
+  .spacer { flex: 1; }
+  .ctl { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 12px; min-height: 36px; }
+  .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+  .seg button { background: transparent; border: 0; padding: 7px 14px; min-height: 36px; cursor: pointer; color: var(--muted); }
+  .seg button[aria-pressed="true"] { background: var(--signal-soft); color: var(--frost); box-shadow: inset 0 -2px 0 var(--signal); }
+  .seg button:hover { color: var(--frost); }
+  .linkbtn { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 6px 8px; }
+  .linkbtn:hover { color: var(--frost); text-decoration: underline; }
+  .sync { color: var(--muted); font-size: 13px; }
+  .sync.stale { color: var(--warning); }
+
+  main { max-width: 1480px; margin: 0 auto; padding: 20px 24px 64px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .card h2 { margin: 0 0 2px; font-size: 16px; font-weight: 650; }
+  .card .sub { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+
+  /* KPI tiles */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px 14px; min-height: 132px; }
+  .kpi .label { color: var(--muted); font-size: 13px; }
+  .kpi .value { font-size: 34px; font-weight: 700; line-height: 1.15; margin: 4px 0 2px; }
+  .kpi .value small { font-size: 15px; font-weight: 500; color: var(--muted); }
+  .kpi .note { font-size: 13px; color: var(--muted); }
+  .delta { font-size: 13px; margin-top: 6px; color: var(--muted); }
+  .delta.good { color: var(--good); }
+  .delta.bad { color: var(--critical); }
+
+  /* Map + attention */
+  .row-map { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; margin-bottom: 16px; }
+  .map-card { padding: 0; overflow: hidden; position: relative; min-height: 460px; }
+  #map { position: absolute; inset: 0; background: #0a1019; }
+  .legend { position: absolute; left: 12px; bottom: 12px; z-index: 500; display: flex; gap: 6px; flex-wrap: wrap;
+    background: rgba(7, 11, 19, 0.88); border: 1px solid var(--line-strong); border-radius: 10px; padding: 6px; }
+  .legend button { display: inline-flex; align-items: center; gap: 8px; background: transparent; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; color: var(--frost); font-size: 13px; }
+  .legend button[aria-pressed="false"] { opacity: 0.4; }
+  .legend button:hover { background: var(--signal-soft); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 2px solid var(--bg); box-sizing: content-box; }
+  .attn { display: flex; flex-direction: column; gap: 12px; }
+  .attn-item { width: 100%; text-align: left; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; }
+  .attn-item:hover { border-color: var(--signal); }
+  .attn-item .n { font-size: 26px; font-weight: 700; line-height: 1.1; }
+  .attn-item .t { font-size: 14px; }
+  .attn-item .d { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .leaflet-container { font: inherit; background: #0a1019; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel-2); color: var(--frost); border: 1px solid var(--line-strong); }
+  .leaflet-popup-content { margin: 12px 14px; line-height: 1.45; }
+  .leaflet-control-attribution { background: rgba(7, 11, 19, 0.7) !important; color: var(--muted) !important; }
+  .leaflet-control-attribution a { color: var(--muted) !important; }
+  .leaflet-bar a { background: var(--panel-2); color: var(--frost); border-color: var(--line-strong); }
+  .marker-cluster-small, .marker-cluster-medium, .marker-cluster-large { background: rgba(59, 140, 255, 0.28); }
+  .marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div { background: rgba(59, 140, 255, 0.85); color: #fff; font-weight: 650; }
+
+  /* Charts row */
+  .row-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .chart-host { position: relative; min-height: 230px; }
+  .chart-host svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .grid-line { stroke: var(--line); stroke-width: 1; }
+  .axis-line { stroke: var(--line-strong); stroke-width: 1; }
+  .tick { fill: var(--faint); font-size: 12px; }
+  .bars { display: flex; flex-direction: column; gap: 4px; }
+  .bars h3 { margin: 10px 0 2px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .bars h3:first-child { margin-top: 0; }
+  .bar-row { display: grid; grid-template-columns: minmax(110px, 38%) 1fr 56px; align-items: center; gap: 10px; min-height: 28px; font-size: 13px; }
+  .bar-row .name { color: var(--frost); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-track { height: 100%; display: flex; align-items: center; }
+  .bar-fill { height: 10px; background: var(--signal); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .bar-row .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .bar-row:hover .bar-fill { filter: brightness(1.25); }
+  .site-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .site-row:first-child { border-top: 0; padding-top: 0; }
+  .site-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .site-row .meta { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+  .site-row .bar { grid-column: 1 / -1; height: 4px; background: var(--panel-2); border-radius: 2px; overflow: hidden; }
+  .site-row .bar span { display: block; height: 100%; background: var(--signal); }
+
+  #tip { position: fixed; z-index: 3000; pointer-events: none; background: var(--panel-2); border: 1px solid var(--line-strong);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5); max-width: 260px; }
+  #tip b { display: block; margin-bottom: 2px; }
+  #tip span { color: var(--muted); }
+
+  /* Table */
+  .table-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+  .table-tools input[type=search] { flex: 1 1 220px; max-width: 360px; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 12px; min-height: 36px; }
+  .table-tools select { background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 12px; min-height: 36px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 9px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  td.nm { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+  td { font-variant-numeric: tabular-nums; }
+  th button { background: none; border: 0; padding: 0; cursor: pointer; color: var(--muted); font-weight: 600; font-size: 13px; }
+  th button:hover, th[aria-sort] button { color: var(--frost); }
+  th[aria-sort="ascending"] button::after { content: " \25B2"; font-size: 10px; }
+  th[aria-sort="descending"] button::after { content: " \25BC"; font-size: 10px; }
+  tbody tr:hover { background: var(--panel-2); }
+  .chip { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-strong); color: var(--muted); }
+  .chip.warn { color: var(--warning); border-color: rgba(250, 178, 25, 0.45); }
+  .chip.ok { color: var(--frost); }
+  .more { display: block; margin: 14px auto 0; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 18px; cursor: pointer; }
+  .more:hover { border-color: var(--signal); }
+  .empty { color: var(--muted); padding: 18px 0; }
+
+  /* Login + messages */
+  .gate { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+  .gate form, .gate .msgbox { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px; }
+  .gate h1 { margin: 0 0 4px; font-size: 22px; }
+  .gate p { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+  .gate label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  .gate input { width: 100%; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 10px 12px; min-height: 40px; }
+  .gate .primary { width: 100%; margin-top: 20px; background: var(--signal); color: #fff; border: 0; border-radius: 8px; padding: 11px; font-weight: 650; cursor: pointer; min-height: 42px; }
+  .gate .primary:disabled { opacity: 0.6; cursor: default; }
+  .err { color: var(--critical); font-size: 14px; margin-top: 12px; }
+  .banner { background: rgba(230, 103, 103, 0.1); border: 1px solid rgba(230, 103, 103, 0.4); color: var(--frost); border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; }
+
+  @media (max-width: 1100px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .row-map { grid-template-columns: 1fr; }
+    .map-card { min-height: 380px; }
+    .row-charts { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 600px) {
+    header.bar, main { padding-left: 16px; padding-right: 16px; }
+    .kpis { grid-template-columns: 1fr; }
+    .kpi .value { font-size: 30px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="gate" class="gate" hidden>
+  <form id="login" autocomplete="on">
+    <h1>Fleet Wolf</h1>
+    <p>Sign in to see your fleet.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button class="primary" type="submit">Sign in</button>
+    <div id="login-err" class="err" role="alert" hidden></div>
+  </form>
+</div>
+
+<div id="nolink" class="gate" hidden>
+  <div class="msgbox">
+    <h1>No fleet linked yet</h1>
+    <p>You're signed in as <span id="who"></span>, but this account isn't linked to a client. Ask Fleet Wolf to add you.</p>
+    <button class="primary" id="nolink-out" style="width:100%;background:var(--panel-2);color:var(--frost);border:1px solid var(--line-strong);border-radius:8px;padding:11px;cursor:pointer">Sign out</button>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <header class="bar">
+    <div class="brand"><i></i>Fleet Wolf</div>
+    <select id="client" class="ctl" aria-label="Client" hidden></select>
+    <span id="client-name" style="color:var(--muted)"></span>
+    <div class="spacer"></div>
+    <span id="sync" class="sync" aria-live="polite"></span>
+    <div class="seg" role="group" aria-label="Time period">
+      <button type="button" data-days="7" aria-pressed="true">7 days</button>
+      <button type="button" data-days="14" aria-pressed="false">14 days</button>
+    </div>
+    <button class="linkbtn" id="signout" type="button">Sign out</button>
+  </header>
+
+  <main>
+    <div id="banner" class="banner" role="alert" hidden></div>
+
+    <section class="kpis" aria-label="Fleet summary" id="kpis"></section>
+
+    <section class="row-map">
+      <div class="card map-card">
+        <div id="map" role="application" aria-label="Map of vehicle locations"></div>
+        <div class="legend" id="legend" role="group" aria-label="Show on map"></div>
+      </div>
+      <div class="card">
+        <h2>Needs attention</h2>
+        <p class="sub" id="attn-sub">Select one to filter the truck list.</p>
+        <div class="attn" id="attn"></div>
+      </div>
+    </section>
+
+    <section class="row-charts">
+      <div class="card">
+        <h2>Trucks used per day</h2>
+        <p class="sub" id="daily-sub">Trucks with at least one trip. Today is left out until it finishes.</p>
+        <div class="chart-host" id="daily"></div>
+      </div>
+      <div class="card">
+        <h2>Safety and monitoring events</h2>
+        <p class="sub">Bars scale within each group.</p>
+        <div class="bars" id="events"></div>
+      </div>
+      <div class="card">
+        <h2>Location rules triggered</h2>
+        <p class="sub">Rules named after jobsites and offices.</p>
+        <div id="sites"></div>
+      </div>
+    </section>
+
+    <section class="card" id="trucks-card">
+      <h2>All trucks</h2>
+      <p class="sub" id="trucks-sub"></p>
+      <div class="table-tools">
+        <input id="q" type="search" placeholder="Search by truck or group" aria-label="Search trucks">
+        <select id="filter" aria-label="Filter trucks">
+          <option value="all">All trucks</option>
+          <option value="unused">Not used this period</option>
+          <option value="stale">Not reporting in 24h+</option>
+          <option value="highrate">Highest event rates</option>
+        </select>
+        <span id="count" class="sync"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr id="thead"></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <button class="more" id="more" type="button" hidden>Show 50 more</button>
+    </section>
+  </main>
+</div>
+
+<div id="tip" hidden role="tooltip"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
+<script src="config.js"></script>
+<script>
+(function () {
+  'use strict';
+  const CFG = window.FW_CONFIG;
+  const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true } });
+  const $ = (id) => document.getElementById(id);
+  const nf = new Intl.NumberFormat('en-US');
+  const nf1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+  const CORE = ['speeding', 'harsh_braking', 'harsh_acceleration', 'harsh_cornering', 'distracted_driving', 'seatbelt', 'collision'];
+  const CONTEXT = ['following_distance', 'driver_monitoring', 'idling', 'compliance', 'device_tampering'];
+  const LABELS = {
+    speeding: 'Speeding', harsh_braking: 'Harsh braking', harsh_acceleration: 'Harsh acceleration', harsh_cornering: 'Harsh cornering',
+    distracted_driving: 'Distracted driving', seatbelt: 'Seat belt', collision: 'Collision',
+    following_distance: 'Following distance', driver_monitoring: 'Driver monitoring', idling: 'Idling',
+    compliance: 'Compliance', device_tampering: 'Device tampering',
+  };
+  const DESC = {
+    driver_monitoring: 'Camera detected eating, drinking, yawning, smoking or eye rubbing',
+    compliance: 'Missing pre-trip and post-trip DVIRs, after-hours use',
+    device_tampering: 'Device removed, camera covered or obstructed',
+    following_distance: 'Camera detected close following',
+  };
+  const state = { clientId: null, clientName: '', days: 7, data: null, vehicles: [], sort: { key: 'core_rate', dir: 'desc' }, filter: 'all', q: '', shown: 50, mapFilter: { moving: true, parked: true, stale: true }, topRate: new Set() };
+  try { state.days = Number(localStorage.getItem('fw_days')) === 14 ? 14 : 7; } catch (e) { /* storage unavailable */ }
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const sum = (obj, keys) => keys.reduce((a, k) => a + (Number(obj && obj[k]) || 0), 0);
+  const ago = (iso) => {
+    if (!iso) return 'never';
+    const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (m < 1) return 'just now';
+    if (m < 60) return m + ' min ago';
+    if (m < 1440) return Math.round(m / 60) + ' h ago';
+    return Math.round(m / 1440) + ' d ago';
+  };
+  const hoursSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 3600000 : Infinity);
+
+  /* ---------- tooltip ---------- */
+  const tip = $('tip');
+  function showTip(html, x, y) {
+    tip.innerHTML = html; tip.hidden = false;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.min(x + 14, window.innerWidth - w - 8) + 'px';
+    tip.style.top = Math.max(8, Math.min(y + 14, window.innerHeight - h - 8)) + 'px';
+  }
+  const hideTip = () => { tip.hidden = true; };
+
+  /* ---------- auth ---------- */
+  function show(which) { ['gate', 'nolink', 'app'].forEach((id) => { $(id).hidden = id !== which; }); }
+  $('login').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button'); const err = $('login-err');
+    btn.disabled = true; btn.textContent = 'Signing in'; err.hidden = true;
+    const { error } = await sb.auth.signInWithPassword({ email: $('email').value.trim(), password: $('password').value });
+    btn.disabled = false; btn.textContent = 'Sign in';
+    if (error) {
+      err.textContent = /invalid/i.test(error.message) ? 'Email or password is incorrect.' : 'Could not sign in. Check your connection and try again.';
+      err.hidden = false;
+    }
+  });
+  async function signOut() { await sb.auth.signOut(); }
+  $('signout').addEventListener('click', signOut);
+  $('nolink-out').addEventListener('click', signOut);
+  let started = false;
+  sb.auth.onAuthStateChange((event, session) => {
+    if (session && !started) { started = true; setTimeout(start, 0); }
+    if (!session) { started = false; clearInterval(state.timer); show('gate'); }
+  });
+
+  async function start() {
+    const { data: u } = await sb.auth.getUser().catch(() => ({ data: null }));
+    const { data: clients, error } = await sb.from('clients').select('id,name').order('name');
+    if (error) { show('app'); return fail('Could not load your fleets.', error); }
+    if (!clients || !clients.length) {
+      $('who').textContent = (u && u.user && u.user.email) || 'this account';
+      return show('nolink');
+    }
+    const sel = $('client');
+    sel.innerHTML = clients.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+    let pick = clients[0].id;
+    try { const last = localStorage.getItem('fw_client'); if (last && clients.some((c) => c.id === last)) pick = last; } catch (e) { /* ignore */ }
+    sel.value = pick;
+    sel.hidden = clients.length < 2;
+    $('client-name').hidden = clients.length >= 2;
+    state.clients = clients;
+    show('app');
+    initMap();
+    setClient(pick);
+    clearInterval(state.timer);
+    state.timer = setInterval(() => { if (!document.hidden) load(); }, 300000);
+  }
+  function setClient(id) {
+    state.clientId = id;
+    const c = (state.clients || []).find((x) => x.id === id);
+    state.clientName = c ? c.name : '';
+    $('client-name').textContent = state.clientName;
+    try { localStorage.setItem('fw_client', id); } catch (e) { /* ignore */ }
+    load();
+  }
+  $('client').addEventListener('change', (e) => setClient(e.target.value));
+  document.querySelectorAll('.seg button').forEach((b) => {
+    b.setAttribute('aria-pressed', String(Number(b.dataset.days) === state.days));
+    b.addEventListener('click', () => {
+      state.days = Number(b.dataset.days);
+      document.querySelectorAll('.seg button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      try { localStorage.setItem('fw_days', String(state.days)); } catch (e) { /* ignore */ }
+      load();
+    });
+  });
+
+  function fail(msg, error) {
+    const b = $('banner');
+    b.textContent = msg + ' Refresh the page; if it keeps happening, tell Fleet Wolf.' + (error && error.message ? ' (' + error.message + ')' : '');
+    b.hidden = false;
+  }
+
+  /* ---------- data ---------- */
+  async function load() {
+    const p = { p_client: state.clientId, p_days: state.days };
+    const [ov, daily, veh, map, sites, conn] = await Promise.all([
+      sb.rpc('dashboard_overview', p), sb.rpc('dashboard_daily', p), sb.rpc('dashboard_vehicles', p),
+      sb.rpc('dashboard_map', { p_client: state.clientId }), sb.rpc('dashboard_sites', p),
+      sb.from('connections').select('last_sync_at,status,last_error').eq('client_id', state.clientId),
+    ]);
+    const bad = [ov, daily, veh, map, sites].find((r) => r.error);
+    if (bad) return fail('Some data could not be loaded.', bad.error);
+    $('banner').hidden = true;
+    state.data = { ov: ov.data, daily: daily.data, sites: sites.data };
+    state.vehicles = (veh.data || []).map((v) => ({ ...v, core_rate: v.miles >= 50 ? (v.core_events / v.miles) * 1000 : null }));
+    state.topRate = new Set(state.vehicles.filter((v) => v.miles >= 200 && v.core_rate != null).sort((a, b) => b.core_rate - a.core_rate).slice(0, 25).map((v) => v.id));
+    state.mapPoints = map.data || [];
+    renderSync(conn.data || []);
+    renderKpis(); renderAttention(); renderMap(); renderDaily(); renderEvents(); renderSites(); renderTable();
+  }
+
+  function renderSync(conns) {
+    const el = $('sync');
+    const latest = conns.map((c) => c.last_sync_at).filter(Boolean).sort().pop();
+    const anyErr = conns.some((c) => c.status === 'error');
+    if (!latest) { el.textContent = 'Waiting for first data sync'; el.className = 'sync stale'; return; }
+    const stale = hoursSince(latest) > 1 || anyErr;
+    el.className = 'sync' + (stale ? ' stale' : '');
+    el.textContent = (anyErr ? 'Sync problem. ' : '') + 'Data synced ' + ago(latest);
+  }
+
+  /* ---------- KPI tiles ---------- */
+  function delta(cur, prev, goodWhen, hasPrev) {
+    if (!hasPrev || !prev) return '<div class="delta">No earlier period to compare yet</div>';
+    const pct = ((cur - prev) / prev) * 100;
+    const up = pct > 0;
+    if (Math.abs(pct) < 2) return `<div class="delta">About the same as the prior ${state.days} days (${up ? '+' : '−'}${nf1.format(Math.abs(pct))}%)</div>`;
+    const good = goodWhen == null ? null : (goodWhen === 'up') === up;
+    const cls = good == null ? '' : good ? 'good' : 'bad';
+    return `<div class="delta ${cls}">${up ? '▲' : '▼'} ${nf1.format(Math.abs(pct))}% vs prior ${state.days} days${good == null ? '' : good ? ', better' : ', worse'}</div>`;
+  }
+  function renderKpis() {
+    const { ov } = state.data; const c = ov.cur, p = ov.prev, hp = ov.has_prev;
+    const coreCur = sum(ov.events_cur, CORE), corePrev = sum(ov.events_prev, CORE);
+    const rateCur = c.miles ? (coreCur / c.miles) * 1000 : 0, ratePrev = p.miles ? (corePrev / p.miles) * 1000 : 0;
+    const active = Number(ov.vehicles_active) || 0;
+    const usedPct = active ? Math.round((c.vehicles_used / active) * 100) : 0;
+    $('kpis').innerHTML = `
+      <div class="kpi"><div class="label">Trucks used</div>
+        <div class="value">${nf.format(c.vehicles_used)} <small>of ${nf.format(active)}</small></div>
+        <div class="note">${usedPct}% of active trucks made a trip</div>${delta(c.vehicles_used, p.vehicles_used, 'up', hp)}</div>
+      <div class="kpi"><div class="label">Miles driven</div>
+        <div class="value">${nf.format(c.miles)}</div>
+        <div class="note">${nf.format(c.trips)} trips</div>${delta(c.miles, p.miles, null, hp)}</div>
+      <div class="kpi"><div class="label">Safety events per 1,000 miles</div>
+        <div class="value">${nf1.format(rateCur)}</div>
+        <div class="note">Speeding, harsh driving, distraction, seat belt</div>${delta(rateCur, ratePrev, 'down', hp)}</div>
+      <div class="kpi"><div class="label">Idle time</div>
+        <div class="value">${nf.format(c.idle_hours)} <small>hours</small></div>
+        <div class="note">${c.trips ? nf1.format(c.idle_hours / (c.vehicles_used || 1)) + ' h per truck used' : ''}</div>${delta(c.idle_hours, p.idle_hours, 'down', hp)}</div>`;
+  }
+
+  /* ---------- needs attention ---------- */
+  function renderAttention() {
+    const vs = state.vehicles;
+    const unused = vs.filter((v) => v.trips === 0);
+    const stale = vs.filter((v) => hoursSince(v.last_seen_at) > 24);
+    const worst = vs.filter((v) => state.topRate.has(v.id)).sort((a, b) => b.core_rate - a.core_rate).slice(0, 3);
+    $('attn').innerHTML = `
+      <button class="attn-item" data-f="unused" type="button"><div class="n">${nf.format(unused.length)}</div>
+        <div class="t">Trucks with no trips in ${state.days} days</div><div class="d">Candidates to reassign or drop</div></button>
+      <button class="attn-item" data-f="stale" type="button"><div class="n">${nf.format(stale.length)}</div>
+        <div class="t">Not reporting in 24 hours or more</div><div class="d">Possible device or power problem</div></button>
+      <button class="attn-item" data-f="highrate" type="button"><div class="n">${worst.length ? nf1.format(worst[0].core_rate) : '–'}</div>
+        <div class="t">Highest safety event rate, per 1,000 miles</div>
+        <div class="d">${worst.length ? esc(worst.map((w) => w.name).join(', ')) : 'Not enough miles to rank'}</div></button>`;
+    $('attn').querySelectorAll('.attn-item').forEach((b) => b.addEventListener('click', () => {
+      state.filter = b.dataset.f; $('filter').value = state.filter; state.shown = 50; renderTable();
+      $('trucks-card').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    }));
+  }
+
+  /* ---------- map ---------- */
+  const STATES = {
+    moving: { label: 'Moving', color: '#3b8cff' },
+    parked: { label: 'Parked', color: '#8d9db7' },
+    stale: { label: 'Not reporting 24h+', color: '#fab219' },
+  };
+  function classify(p) {
+    if (hoursSince(p.recorded_at) > 24) return 'stale';
+    if ((p.speed_kph || 0) > 5 && hoursSince(p.recorded_at) < 0.5) return 'moving';
+    return 'parked';
+  }
+  function initMap() {
+    if (state.map) { setTimeout(() => state.map.invalidateSize(), 50); return; }
+    state.map = L.map('map', { preferCanvas: true, zoomControl: true }).setView([37.5, -121.0], 7);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 18, subdomains: 'abcd', attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    }).addTo(state.map);
+    state.cluster = L.markerClusterGroup({ showCoverageOnHover: false, maxClusterRadius: 45 });
+    state.map.addLayer(state.cluster);
+    state.fitted = false;
+  }
+  function renderMap() {
+    const pts = state.mapPoints.map((p) => ({ ...p, st: classify(p) }));
+    const counts = { moving: 0, parked: 0, stale: 0 };
+    pts.forEach((p) => { counts[p.st]++; });
+    $('legend').innerHTML = Object.keys(STATES).map((k) =>
+      `<button type="button" data-k="${k}" aria-pressed="${state.mapFilter[k]}"><span class="dot" style="background:${STATES[k].color}"></span>${STATES[k].label} ${nf.format(counts[k])}</button>`).join('');
+    $('legend').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+      state.mapFilter[b.dataset.k] = !state.mapFilter[b.dataset.k]; renderMap();
+    }));
+    state.cluster.clearLayers();
+    const shown = pts.filter((p) => state.mapFilter[p.st]);
+    const layers = shown.map((p) => {
+      const m = L.circleMarker([p.lat, p.lng], { radius: 6, color: '#070b13', weight: 2, fillColor: STATES[p.st].color, fillOpacity: 1 });
+      m.bindPopup(`<b>${esc(p.name)}</b><br>${esc(p.group_name || '')}${p.group_name ? '<br>' : ''}${STATES[p.st].label}${p.st === 'moving' ? ', ' + Math.round(p.speed_kph * 0.621371) + ' mph' : ''}<br><span style="color:var(--muted)">Last report ${ago(p.recorded_at)}</span>`);
+      return m;
+    });
+    state.cluster.addLayers(layers);
+    if (!state.fitted && shown.length) { state.map.fitBounds(L.latLngBounds(shown.map((p) => [p.lat, p.lng])), { padding: [30, 30], maxZoom: 10 }); state.fitted = true; }
+  }
+
+  /* ---------- trucks-used line chart ---------- */
+  function renderDaily() {
+    const host = $('daily');
+    const todayLA = new Intl.DateTimeFormat('en-CA', { timeZone: CFG.timeZone }).format(new Date());
+    const rows = (state.data.daily || []).filter((d) => d.day < todayLA);
+    if (!rows.length) { host.innerHTML = '<div class="empty">No trips in this period yet.</div>'; return; }
+    const W = Math.max(host.clientWidth, 280), H = 230, m = { l: 40, r: 14, t: 12, b: 30 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const max = Math.max(...rows.map((r) => r.vehicles_used), 1);
+    const step = max <= 10 ? 2 : max <= 50 ? 10 : max <= 150 ? 25 : max <= 400 ? 50 : 100;
+    const yMax = Math.ceil(max / step) * step;
+    const x = (i) => m.l + (rows.length === 1 ? iw / 2 : (i / (rows.length - 1)) * iw);
+    const y = (v) => m.t + ih - (v / yMax) * ih;
+    let g = '';
+    for (let t = 0; t <= yMax; t += step) g += `<line class="${t === 0 ? 'axis-line' : 'grid-line'}" x1="${m.l}" x2="${W - m.r}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end">${t}</text>`;
+    const every = Math.ceil(rows.length / Math.max(2, Math.floor(iw / 62)));
+    const labels = rows.map((r, i) => {
+      if (i % every) return '';
+      const d = new Date(r.day + 'T12:00:00');
+      return `<text class="tick" x="${x(i)}" y="${H - 8}" text-anchor="middle">${d.toLocaleDateString('en-US', { weekday: 'short' })} ${d.getDate()}</text>`;
+    }).join('');
+    const path = rows.map((r, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(r.vehicles_used).toFixed(1)).join(' ');
+    const dots = rows.map((r, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(r.vehicles_used).toFixed(1)}" r="4" fill="#3b8cff" stroke="#0d1420" stroke-width="2"/>`).join('');
+    host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Trucks used per day, ${rows[0].day} to ${rows[rows.length - 1].day}. See the table below for values.">
+      ${g}${labels}<path d="${path}" fill="none" stroke="#3b8cff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>${dots}
+      <line id="xh" y1="${m.t}" y2="${m.t + ih}" stroke="rgba(150,185,235,.45)" stroke-width="1" hidden/></svg>
+      <table class="sr-only"><caption>Trucks used per day</caption><thead><tr><th>Day</th><th>Trucks used</th><th>Miles</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${r.day}</td><td>${r.vehicles_used}</td><td>${r.miles}</td></tr>`).join('')}</tbody></table>`;
+    const svg = host.querySelector('svg'), xh = svg.querySelector('#xh');
+    svg.addEventListener('pointermove', (e) => {
+      const r = svg.getBoundingClientRect(); const px = ((e.clientX - r.left) / r.width) * W;
+      let best = 0; rows.forEach((_, i) => { if (Math.abs(x(i) - px) < Math.abs(x(best) - px)) best = i; });
+      const d = rows[best], dt = new Date(d.day + 'T12:00:00');
+      xh.setAttribute('x1', x(best)); xh.setAttribute('x2', x(best)); xh.removeAttribute('hidden');
+      showTip(`<b>${dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</b>${nf.format(d.vehicles_used)} trucks used<br><span>${nf.format(d.miles)} miles</span>`, e.clientX, e.clientY);
+    });
+    svg.addEventListener('pointerleave', () => { xh.setAttribute('hidden', ''); hideTip(); });
+  }
+
+  /* ---------- event bars ---------- */
+  function renderEvents() {
+    const cur = state.data.ov.events_cur || {}, prev = state.data.ov.events_prev || {}, hp = state.data.ov.has_prev;
+    const group = (title, keys) => {
+      const rows = keys.map((k) => ({ k, n: Number(cur[k]) || 0 })).sort((a, b) => b.n - a.n);
+      const max = Math.max(...rows.map((r) => r.n), 1);
+      return `<h3>${title}</h3>` + rows.map((r) => `<div class="bar-row" data-k="${r.k}" data-n="${r.n}">
+        <div class="name">${LABELS[r.k]}</div><div class="bar-track"><div class="bar-fill" style="width:${(r.n / max) * 100}%"></div></div><div class="num">${nf.format(r.n)}</div></div>`).join('');
+    };
+    const host = $('events');
+    host.innerHTML = group('Safety', CORE) + group('Camera, compliance and idling', CONTEXT);
+    host.querySelectorAll('.bar-row').forEach((row) => {
+      row.addEventListener('pointermove', (e) => {
+        const k = row.dataset.k, n = Number(row.dataset.n), pv = Number(prev[k]) || 0;
+        const chg = hp && pv ? `<br><span>${n >= pv ? '▲' : '▼'} ${nf1.format(Math.abs(((n - pv) / pv) * 100))}% vs prior ${state.days} days</span>` : '';
+        showTip(`<b>${LABELS[k]}</b>${nf.format(n)} events${chg}${DESC[k] ? `<br><span>${DESC[k]}</span>` : ''}`, e.clientX, e.clientY);
+      });
+      row.addEventListener('pointerleave', hideTip);
+    });
+  }
+
+  /* ---------- location rules ---------- */
+  function renderSites() {
+    const rows = state.data.sites || [];
+    if (!rows.length) { $('sites').innerHTML = '<div class="empty">No location rules triggered in this period.</div>'; return; }
+    const max = Math.max(...rows.map((r) => r.events), 1);
+    $('sites').innerHTML = rows.map((r) => `<div class="site-row"><div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
+      <div class="meta">${nf.format(r.events)} events, ${nf.format(r.vehicles)} trucks</div><div class="bar"><span style="width:${(r.events / max) * 100}%"></span></div></div>`).join('');
+  }
+
+  /* ---------- truck table ---------- */
+  const COLS = [
+    { key: 'name', label: 'Truck' }, { key: 'group_name', label: 'Group' }, { key: 'trips', label: 'Trips' },
+    { key: 'miles', label: 'Miles' }, { key: 'idle_hours', label: 'Idle hours' }, { key: 'core_events', label: 'Safety events' },
+    { key: 'core_rate', label: 'Per 1,000 mi' }, { key: 'last_trip_at', label: 'Last trip' }, { key: 'status', label: 'Status' },
+  ];
+  $('thead').innerHTML = COLS.map((c) => `<th scope="col" data-k="${c.key}"><button type="button">${c.label}</button></th>`).join('');
+  $('thead').addEventListener('click', (e) => {
+    const th = e.target.closest('th'); if (!th) return; const k = th.dataset.k;
+    state.sort = { key: k, dir: state.sort.key === k && state.sort.dir === 'desc' ? 'asc' : (k === 'name' || k === 'group_name') && state.sort.key !== k ? 'asc' : 'desc' };
+    renderTable();
+  });
+  $('q').addEventListener('input', (e) => { state.q = e.target.value.toLowerCase(); state.shown = 50; renderTable(); });
+  $('filter').addEventListener('change', (e) => { state.filter = e.target.value; state.shown = 50; renderTable(); });
+  $('more').addEventListener('click', () => { state.shown += 50; renderTable(); });
+  const statusOf = (v) => (hoursSince(v.last_seen_at) > 24 ? 'stale' : v.trips === 0 ? 'unused' : 'ok');
+
+  function renderTable() {
+    $('trucks-sub').textContent = `Activity over the last ${state.days} days. Safety events are speeding, harsh driving, distraction and seat belt.`;
+    let rows = state.vehicles.filter((v) => {
+      if (state.q && !((v.name || '') + ' ' + (v.group_name || '')).toLowerCase().includes(state.q)) return false;
+      if (state.filter === 'unused') return v.trips === 0;
+      if (state.filter === 'stale') return hoursSince(v.last_seen_at) > 24;
+      if (state.filter === 'highrate') return state.topRate.has(v.id);
+      return true;
+    });
+    const { key, dir } = state.sort, mul = dir === 'asc' ? 1 : -1;
+    const val = (v) => (key === 'status' ? statusOf(v) : v[key]);
+    rows = rows.slice().sort((a, b) => {
+      const x = val(a), y = val(b);
+      if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
+      return (typeof x === 'string' ? x.localeCompare(y, undefined, { numeric: true }) : x - y) * mul;
+    });
+    document.querySelectorAll('#thead th').forEach((th) => { if (th.dataset.k === key) th.setAttribute('aria-sort', dir === 'asc' ? 'ascending' : 'descending'); else th.removeAttribute('aria-sort'); });
+    $('count').textContent = `${nf.format(rows.length)} of ${nf.format(state.vehicles.length)} trucks`;
+    const page = rows.slice(0, state.shown);
+    $('tbody').innerHTML = page.length ? page.map((v) => {
+      const st = statusOf(v);
+      const chip = st === 'stale' ? '<span class="chip warn">⚠ Not reporting</span>' : st === 'unused' ? '<span class="chip">Not used</span>' : '<span class="chip ok">In use</span>';
+      return `<tr><td class="nm" title="${esc(v.name)}">${esc(v.name)}</td><td>${esc(v.group_name || '')}</td><td>${nf.format(v.trips)}</td><td>${nf.format(v.miles)}</td>
+        <td>${nf1.format(v.idle_hours)}</td><td>${nf.format(v.core_events)}</td><td>${v.core_rate == null ? '–' : nf1.format(v.core_rate)}</td>
+        <td>${v.last_trip_at ? ago(v.last_trip_at) : 'none'}</td><td>${chip}</td></tr>`;
+    }).join('') : '<tr><td colspan="9" class="empty">No trucks match. Clear the search or choose "All trucks".</td></tr>';
+    $('more').hidden = rows.length <= state.shown;
+    $('more').textContent = `Show ${Math.min(50, rows.length - state.shown)} more`;
+  }
+
+  window.addEventListener('resize', () => { if (state.data) renderDaily(); });
+
+  /* ---------- boot ---------- */
+  sb.auth.getSession().then(({ data }) => { if (!data.session) show('gate'); });
+})();
+</script>
+</body>
+</html>
