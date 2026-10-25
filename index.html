@@ -67,6 +67,23 @@
   .delta.good { color: var(--good); }
   .delta.bad { color: var(--critical); }
 
+  /* Vehicles by platform */
+  .providers { margin-bottom: 16px; }
+  .prov-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 0 0 10px; }
+  .prov-head h2 { margin: 0; font-size: 16px; font-weight: 650; }
+  .prov-head span { color: var(--muted); font-size: 13px; }
+  .prov-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .prov { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; min-height: 132px; }
+  .prov.waiting { background: transparent; border: 1px dashed var(--line-strong); }
+  .prov .ptop { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: var(--muted); font-size: 13px; }
+  .prov .ptop b { color: var(--frost); font-size: 15px; font-weight: 650; }
+  .prov .pval { font-size: 34px; font-weight: 700; line-height: 1.15; margin: 4px 0 2px; }
+  .prov .pval small { font-size: 15px; font-weight: 500; color: var(--muted); }
+  .prov .pwait { font-size: 20px; font-weight: 650; margin: 8px 0 4px; color: var(--muted); }
+  .prov .note { font-size: 13px; color: var(--muted); }
+  .prov .live { color: var(--good); }
+  .prov .warnt { color: var(--warning); }
+
   /* Map + attention */
   .row-map { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; margin-bottom: 16px; }
   .map-card { padding: 0; overflow: hidden; position: relative; min-height: 460px; }
@@ -157,6 +174,7 @@
 
   @media (max-width: 1100px) {
     .kpis { grid-template-columns: repeat(2, 1fr); }
+    .prov-grid { grid-template-columns: 1fr; }
     .row-map { grid-template-columns: 1fr; }
     .map-card { min-height: 380px; }
     .row-charts { grid-template-columns: 1fr; }
@@ -209,6 +227,11 @@
     <div id="banner" class="banner" role="alert" hidden></div>
 
     <section class="kpis" aria-label="Fleet summary" id="kpis"></section>
+
+    <section class="providers" aria-labelledby="prov-h">
+      <div class="prov-head"><h2 id="prov-h">Vehicles by platform</h2><span>How many vehicles are still in each telematics account.</span></div>
+      <div class="prov-grid" id="providers"></div>
+    </section>
 
     <section class="row-map">
       <div class="card map-card">
@@ -389,20 +412,21 @@
   /* ---------- data ---------- */
   async function load() {
     const p = { p_client: state.clientId, p_days: state.days };
-    const [ov, daily, veh, map, sites, conn] = await Promise.all([
+    const [ov, daily, veh, map, sites, prov, conn] = await Promise.all([
       sb.rpc('dashboard_overview', p), sb.rpc('dashboard_daily', p), sb.rpc('dashboard_vehicles', p),
       sb.rpc('dashboard_map', { p_client: state.clientId }), sb.rpc('dashboard_sites', p),
+      sb.rpc('dashboard_providers', { p_client: state.clientId }),
       sb.from('connections').select('last_sync_at,status,last_error').eq('client_id', state.clientId),
     ]);
-    const bad = [ov, daily, veh, map, sites].find((r) => r.error);
+    const bad = [ov, daily, veh, map, sites, prov].find((r) => r.error);
     if (bad) return fail('Some data could not be loaded.', bad.error);
     $('banner').hidden = true;
-    state.data = { ov: ov.data, daily: daily.data, sites: sites.data };
+    state.data = { ov: ov.data, daily: daily.data, sites: sites.data, providers: prov.data || [] };
     state.vehicles = (veh.data || []).map((v) => ({ ...v, core_rate: v.miles >= 50 ? (v.core_events / v.miles) * 1000 : null }));
     state.topRate = new Set(state.vehicles.filter((v) => v.miles >= 200 && v.core_rate != null).sort((a, b) => b.core_rate - a.core_rate).slice(0, 25).map((v) => v.id));
     state.mapPoints = map.data || [];
     renderSync(conn.data || []);
-    renderKpis(); renderAttention(); renderMap(); renderDaily(); renderEvents(); renderSites(); renderTable();
+    renderKpis(); renderProviders(); renderAttention(); renderMap(); renderDaily(); renderEvents(); renderSites(); renderTable();
   }
 
   function renderSync(conns) {
@@ -444,6 +468,27 @@
       <div class="kpi"><div class="label">Idle time</div>
         <div class="value">${nf.format(c.idle_hours)} <small>hours</small></div>
         <div class="note">${c.trips ? nf1.format(c.idle_hours / (c.vehicles_used || 1)) + ' h per truck used' : ''}</div>${delta(c.idle_hours, p.idle_hours, 'down', hp)}</div>`;
+  }
+
+  /* ---------- vehicles by platform ---------- */
+  const PLATFORMS = [{ key: 'geotab', name: 'Geotab' }, { key: 'motive', name: 'Motive' }, { key: 'samsara', name: 'Samsara' }];
+  function renderProviders() {
+    const conns = state.data.providers || [];
+    $('providers').innerHTML = PLATFORMS.map((pl) => {
+      const mine = conns.filter((c) => c.provider === pl.key);
+      const live = mine.filter((c) => c.status !== 'pending' && Number(c.vehicles_total) > 0);
+      if (!live.length) {
+        return `<div class="prov waiting"><div class="ptop"><b>${pl.name}</b></div>
+          <div class="pwait">Waiting on API data</div>
+          <div class="note">Connect a read-only ${pl.name} API key to see how many vehicles are still on this platform.</div></div>`;
+      }
+      const act = live.reduce((a, c) => a + Number(c.vehicles_active), 0), tot = live.reduce((a, c) => a + Number(c.vehicles_total), 0);
+      const latest = live.map((c) => c.last_sync_at).filter(Boolean).sort().pop();
+      const err = live.some((c) => c.status === 'error');
+      return `<div class="prov"><div class="ptop"><b>${pl.name}</b><span class="${err ? 'warnt' : 'live'}">${err ? '⚠ Sync problem' : '● Live'}</span></div>
+        <div class="pval">${nf.format(act)} <small>vehicles</small></div>
+        <div class="note">Active in the account${tot > act ? `, ${nf.format(tot - act)} inactive` : ''}. Synced ${ago(latest)}.</div></div>`;
+    }).join('');
   }
 
   /* ---------- needs attention ---------- */
